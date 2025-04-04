@@ -1,0 +1,159 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Account {
+  id                    String    @id @default(cuid())
+  userId                String
+  type                  String  @default("user")
+  provider              String? 
+  providerAccountId     String?
+  refresh_token         String?
+  access_token          String?
+  expires_at            Int?
+  token_type            String?
+  scope                 String?
+  id_token              String?
+  session_state         String?
+  accountId             String
+  providerId            String
+  accessToken           String?
+  refreshToken          String?
+  idToken               String?
+  accessTokenExpiresAt  DateTime?
+  refreshTokenExpiresAt DateTime?
+  password              String?
+  createdAt             DateTime
+  updatedAt             DateTime
+  user                  User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("account")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  userId       String
+  expiresAt    DateTime
+  token        String   @unique
+  createdAt    DateTime
+  updatedAt    DateTime
+  ipAddress    String?
+  userAgent    String?
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("session")
+}
+
+model User {
+  id            String        @id @default(cuid())
+  name          String?
+  email         String?       @unique
+  emailVerified Boolean?      @default(false)
+  image         String?
+  password      String?
+  role          UserRole      @default(STUDENT)
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  annotations   Annotation[]
+  documents     Document[]
+  adminGroups   Group[]       @relation("GroupAdmin")
+  groups        GroupMember[]
+  accounts      Account[]
+  sessions      Session[]
+  sentInvitations GroupInvitation[] @relation("SentInvitations")
+
+  @@map("user")
+}
+
+model Group {
+  id          String        @id @default(cuid())
+  name        String
+  description String?
+  adminId     String
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  documents   Document[]
+  admin       User          @relation("GroupAdmin", fields: [adminId], references: [id])
+  members     GroupMember[]
+  invitations GroupInvitation[]
+}
+
+model GroupMember {
+  id        String    @id @default(cuid())
+  groupId   String
+  userId    String
+  role      GroupRole @default(MEMBER)
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  group     Group     @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+}
+
+model Document {
+  id              String       @id @default(cuid())
+  title           String
+  description     String?
+  cloudStorageUrl String
+  uploaderId      String
+  groupId         String?
+  createdAt       DateTime     @default(now())
+  updatedAt       DateTime     @updatedAt
+  annotations     Annotation[]
+  group           Group?       @relation(fields: [groupId], references: [id])
+  uploader        User         @relation(fields: [uploaderId], references: [id])
+}
+
+model Annotation {
+  id         String   @id @default(cuid())
+  content    String
+  documentId String
+  userId     String
+  pageNumber Int?     // Page number in the document
+  positionX  Float?   // X coordinate in the page (0-1 range)
+  positionY  Float?   // Y coordinate in the page (0-1 range)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id])
+}
+
+model Verification {
+  id         String    @id
+  identifier String
+  value      String
+  expiresAt  DateTime
+  createdAt  DateTime?
+  updatedAt  DateTime?
+
+  @@map("verification")
+}
+
+model GroupInvitation {
+  id         String   @id @default(cuid())
+  email      String
+  groupId    String
+  token      String   @unique
+  expiresAt  DateTime
+  inviterId  String
+  createdAt  DateTime @default(now())
+  group      Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  inviter    User     @relation("SentInvitations", fields: [inviterId], references: [id])
+}
+
+enum UserRole {
+  STUDENT
+  ADMIN
+}
+
+enum GroupRole {
+  MEMBER
+  ADMIN
+}
