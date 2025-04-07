@@ -273,8 +273,7 @@ export default function GroupEventManager({ groupId, members, isAdmin, userId }:
         },
         body: JSON.stringify({
           eventId,
-          userId,
-          responseStatus: response
+          response
         }),
       });
       

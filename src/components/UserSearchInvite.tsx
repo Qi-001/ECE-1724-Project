@@ -42,9 +42,10 @@ export default function UserSearchInvite({ groupId }: UserSearchInviteProps) {
       }
       
       const data = await response.json();
-      setSearchResults(data);
+      const users = data.users || [];
+      setSearchResults(users);
       
-      if (data.length === 0) {
+      if (users.length === 0) {
         setError('No user found with this email address');
       }
     } catch (error: any) {
