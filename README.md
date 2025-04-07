@@ -3,6 +3,9 @@
 ## Team Information
 - Qi Zhang - Student ID: 1010190106 - qqi.zhang@mail.utoronto.ca
 
+## Video Demo
+https://drive.google.com/file/d/1PfXUPPCClQ3FrvGUgJ-bEnSwYHbDXfGE/view?usp=sharing
+
 ## Motivation
 Study is motivated by the need for a seamless collaborative learning environment for students. Traditional study methods often lack collaboration features, making group study sessions less effective, especially in remote settings. This project aims to bridge this gap by providing a platform where students can collaborate on documents, coordinate study sessions, and share resources efficiently.
 
