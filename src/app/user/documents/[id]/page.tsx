@@ -1,35 +1,18 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
-import { useParams, useRouter } from 'next/navigation';
-import Navigation from '@/components/Navigation';
+import { useEffect, useState, useRef } from 'react';
+import { useRouter } from 'next/navigation';
+import Navigation from '@/components/common/Navigation';
 import { authClient } from '@/lib/auth-client';
-import { io, Socket } from 'socket.io-client';
-
-interface Annotation {
-  id: string;
-  content: string;
-  documentId: string;
-  userId: string;
-  pageNumber?: number;
-  positionX?: number;
-  positionY?: number;
-  createdAt: Date;
-  user: {
-    id: string;
-    name: string | null;
-    email: string;
-  };
-  isBeingEdited?: boolean;
-}
+import Link from 'next/link';
 
 interface Document {
   id: string;
   title: string;
-  cloudStorageUrl: string;
   description: string | null;
+  cloudStorageUrl: string;
+  uploaderId: string;
   groupId: string | null;
-  annotations: Annotation[];
   group: {
     id: string;
     name: string;
@@ -39,136 +22,92 @@ interface Document {
   } | null;
 }
 
-interface TypingUser {
+interface Comment {
   id: string;
-  name: string | null;
-  email: string;
   content: string;
-  lastTyped: number;
+  documentId: string;
+  userId: string;
+  pageNumber: number | null;
+  createdAt: string;
+  user: {
+    id: string;
+    name: string | null;
+    email: string;
+  };
+}
+
+interface DocumentPermission {
+  userId: string;
+  documentId: string;
+  role: string;
 }
 
 export default function DocumentViewer() {
-  const params = useParams();
   const router = useRouter();
-  const documentId = params.id as string;
+  const [documentId, setDocumentId] = useState<string>('');
+  const documentContainerRef = useRef<HTMLDivElement>(null);
+  
+  // Document state
   const [document, setDocument] = useState<Document | null>(null);
   const [loading, setLoading] = useState(true);
-  const [session, setSession] = useState<any>(null);
-  const [newAnnotation, setNewAnnotation] = useState('');
-  const [annotations, setAnnotations] = useState<Annotation[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [typingUsers, setTypingUsers] = useState<Map<string, TypingUser>>(new Map());
-  
-  // Location state
+  const [session, setSession] = useState<any>(null);
   const [currentPage, setCurrentPage] = useState<number>(1);
-  const [selectedPosition, setSelectedPosition] = useState<{ x: number, y: number } | null>(null);
-  const [locationSelectMode, setLocationSelectMode] = useState(false);
-  const iframeRef = useRef<HTMLIFrameElement>(null);
   
-  // Socket reference
-  const socketRef = useRef<Socket | null>(null);
+  // User permissions
+  const [userPermission, setUserPermission] = useState<DocumentPermission | null>(null);
+
+  // Sidebar state
+  const [showPermissions, setShowPermissions] = useState(false);
   
-  // Typing debounce timer
-  const typingTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Add a state for the selected annotation
-  const [selectedAnnotationId, setSelectedAnnotationId] = useState<string | null>(null);
-
-  // Add a state for the annotation input
-  const [showAnnotationInput, setShowAnnotationInput] = useState(false);
-  const [currentAnnotationId, setCurrentAnnotationId] = useState<string | null>(null);
-  const annotationInputRef = useRef<HTMLTextAreaElement>(null);
-
+  // Comments state
+  const [comments, setComments] = useState<Comment[]>([]);
+  const [newComment, setNewComment] = useState('');
+  const [submittingComment, setSubmittingComment] = useState(false);
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editedCommentContent, setEditedCommentContent] = useState('');
+  const [showMenuForComment, setShowMenuForComment] = useState<string | null>(null);
+  
+  // Get document ID from URL safely
   useEffect(() => {
-    checkAuth();
-    fetchDocument();
-    
-    // Set up Socket.io for real-time annotations
-    socketRef.current = io(process.env.NEXT_PUBLIC_SOCKET_URL || 'http://localhost:3001');
-    
-    socketRef.current.on('connect', () => {
-      console.log('Connected to socket server');
-      socketRef.current?.emit('joinDocument', documentId);
-    });
-    
-    socketRef.current.on('newAnnotation', (annotation: Annotation) => {
-      setAnnotations(prev => [...prev, annotation]);
-    });
-    
-    // Handle users typing in an annotation
-    socketRef.current.on('userTyping', (data: { 
-      user: { id: string, name: string | null, email: string }, 
-      content: string,
-      annotationId?: string
-    }) => {
-      if (data.annotationId) {
-        // User is editing an existing annotation
-        setAnnotations(prev => 
-          prev.map(a => 
-            a.id === data.annotationId 
-              ? { ...a, content: data.content, isBeingEdited: true } 
-              : a
-          )
-        );
-      } else {
-        // User is typing a new annotation
-        setTypingUsers(prev => {
-          const newMap = new Map(prev);
-          newMap.set(data.user.id, {
-            id: data.user.id,
-            name: data.user.name,
-            email: data.user.email,
-            content: data.content,
-            lastTyped: Date.now()
-          });
-          return newMap;
-        });
+    if (typeof window !== 'undefined') {
+      const id = window.location.pathname.split('/').pop() || '';
+      if (id) {
+        setDocumentId(id);
       }
-    });
-    
-    // Handle annotation updates
-    socketRef.current.on('updateAnnotation', (updatedAnnotation: Annotation) => {
-      setAnnotations(prev => 
-        prev.map(a => a.id === updatedAnnotation.id ? updatedAnnotation : a)
-      );
-    });
-    
-    // Clean up typing users
-    const typingCleanupInterval = setInterval(() => {
-      setTypingUsers(prev => {
-        const now = Date.now();
-        const newMap = new Map(prev);
-        
-        for (const [userId, user] of newMap.entries()) {
-          if (now - user.lastTyped > 3000) { // 3 seconds
-            newMap.delete(userId);
-          }
-        }
-        
-        return newMap;
-      });
-    }, 1000);
-    
-    return () => {
-      socketRef.current?.disconnect();
-      clearInterval(typingCleanupInterval);
+    }
+  }, []);
+  
+  // Initialize auth and document data
+  useEffect(() => {
+    const initialize = async () => {
+      await checkAuth();
+      if (documentId) {
+        await fetchDocument();
+        await fetchPermissions();
+        await fetchComments();
+      }
     };
+    
+    initialize();
   }, [documentId]);
 
+  // Authentication check
   const checkAuth = async () => {
     try {
-      const session = await (authClient as any).getSession();
-      if (!session.data) {
+      const sessionData = await (authClient as any).getSession();
+      if (!sessionData?.data) {
         router.push('/auth/signin');
         return;
       }
-      setSession(session);
+      setSession(sessionData);
     } catch (error) {
       console.error('Auth error:', error);
       router.push('/auth/signin');
     }
   };
 
+  // Fetch document data
   const fetchDocument = async () => {
     try {
       setLoading(true);
@@ -178,7 +117,6 @@ export default function DocumentViewer() {
       }
       const data = await response.json();
       setDocument(data);
-      setAnnotations(data.annotations || []);
     } catch (error) {
       console.error('Error fetching document:', error);
       setError('Failed to load document');
@@ -187,231 +125,172 @@ export default function DocumentViewer() {
     }
   };
 
-  const handleAnnotationChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    const content = e.target.value;
-    setNewAnnotation(content);
+  // Fetch user permissions
+  const fetchPermissions = async () => {
+    if (!session?.data?.user?.id) return;
     
-    // Clear any existing timer
-    if (typingTimerRef.current) clearTimeout(typingTimerRef.current);
-    
-    // Send typing notification immediately for real-time collaboration
-    if (session?.data?.user && content.trim()) {
-      socketRef.current?.emit('userTyping', {
-        documentId,
-        user: {
-          id: session.data.user.id,
-          name: session.data.user.name,
-          email: session.data.user.email
-        },
-        content
-      });
-    }
-    
-    // Debounced auto-save
-    typingTimerRef.current = setTimeout(async () => {
-      if (!session?.data?.user?.id || !content.trim()) return;
-      
-      try {
-        const isEditing = !!currentAnnotationId;
-        const endpoint = isEditing 
-          ? `/api/annotations/${currentAnnotationId}` 
-          : '/api/annotations';
-        
-        const method = isEditing ? 'PUT' : 'POST';
-        
-        const payload = isEditing 
-          ? { content } 
-          : {
-              content,
-              documentId,
-              userId: session.data.user.id,
-              pageNumber: currentPage,
-              positionX: selectedPosition?.x,
-              positionY: selectedPosition?.y
-            };
-        
-        const response = await fetch(endpoint, {
-          method,
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(payload),
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Failed to ${isEditing ? 'update' : 'create'} annotation`);
-        }
-        
-        const data = await response.json();
-        
-        // Update annotations list
-        if (isEditing) {
-          setAnnotations(prev => prev.map(a => a.id === currentAnnotationId ? data : a));
-          socketRef.current?.emit('updateAnnotation', data);
-        } else {
-          // For new annotations, store the ID for future updates
-          setCurrentAnnotationId(data.id);
-          setAnnotations(prev => [data, ...prev]);
-          socketRef.current?.emit('addAnnotation', data);
-        }
-        
-        console.log(`Annotation ${isEditing ? 'updated' : 'created'} successfully`);
-      } catch (error) {
-        console.error('Error saving annotation:', error);
-      }
-    }, 1000); // Auto-save after 1 second of inactivity
-  };
-
-  const addAnnotation = async () => {
-    if (!newAnnotation.trim() || !session?.data?.user?.id) return;
-
     try {
-      const response = await fetch('/api/annotations', {
+      const response = await fetch(`/api/documents/${documentId}/permissions`);
+      if (response.ok) {
+        const data = await response.json();
+        // Extract permissions array from the response
+        const permissions = data.permissions || [];
+        
+        // Find current user's permission
+        const userPerm = permissions.find(
+          (p: DocumentPermission) => p.userId === session.data?.user?.id
+        );
+        
+        if (userPerm) {
+          setUserPermission(userPerm);
+        } else {
+          // If no explicit permission, check if document owner
+          if (document?.uploaderId === session.data?.user?.id) {
+            setUserPermission({
+              userId: session.data?.user?.id,
+              documentId,
+              role: 'owner'
+            });
+          } else if (document?.group?.members.some(m => m.userId === session.data?.user?.id)) {
+            setUserPermission({
+              userId: session.data?.user?.id,
+              documentId,
+              role: 'viewer'
+            });
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Error fetching permissions:', error);
+    }
+  };
+  
+  // Fetch comments for the document
+  const fetchComments = async () => {
+    if (!documentId) return;
+    
+    try {
+      const response = await fetch(`/api/documents/${documentId}/comments`);
+      if (response.ok) {
+        const data = await response.json();
+        // Handle both direct array and paginated response formats
+        const commentsData = Array.isArray(data) ? data : (data.comments || []);
+        setComments(commentsData);
+      }
+    } catch (error) {
+      console.error('Error fetching comments:', error);
+    }
+  };
+  
+  // Handle adding new comment
+  const handleAddComment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newComment.trim() || !documentId || submittingComment) return;
+    
+    try {
+      setSubmittingComment(true);
+      const response = await fetch('/api/comments', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          content: newAnnotation,
+          content: newComment,
           documentId,
-          userId: session.data.user.id,
-          pageNumber: currentPage,
-          positionX: selectedPosition?.x,
-          positionY: selectedPosition?.y
+          pageNumber: currentPage
         }),
       });
-
-      if (!response.ok) {
-        throw new Error('Failed to add annotation');
+      
+      if (response.ok) {
+        const comment = await response.json();
+        setComments(prevComments => [comment, ...prevComments]);
+        setNewComment('');
       }
-
-      const data = await response.json();
-      
-      // The socket server will broadcast this to all users
-      socketRef.current?.emit('addAnnotation', data);
-      
-      // Clear the input and location selection
-      setNewAnnotation('');
-      setLocationSelectMode(false);
-      setSelectedPosition(null);
     } catch (error) {
-      console.error('Error adding annotation:', error);
+      console.error('Error adding comment:', error);
+    } finally {
+      setSubmittingComment(false);
     }
   };
+  
+  // Start editing a comment
+  const startEditingComment = (comment: Comment) => {
+    setEditingCommentId(comment.id);
+    setEditedCommentContent(comment.content);
+    setShowMenuForComment(null);
+  };
 
-  const handleDocumentClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!locationSelectMode) return;
+  // Cancel editing a comment
+  const cancelEditingComment = () => {
+    setEditingCommentId(null);
+    setEditedCommentContent('');
+  };
+
+  // Save edited comment
+  const saveEditedComment = async () => {
+    if (!editingCommentId || !editedCommentContent.trim()) return;
     
-    // Get the scrollable container
-    const container = document.getElementById('scrollable-container');
-    if (!container) return;
-    
-    // Get container position and dimensions
-    const rect = container.getBoundingClientRect();
-    
-    // Calculate position with scroll offset
-    const scrollTop = container.scrollTop;
-    const scrollLeft = container.scrollLeft;
-    
-    // Calculate position relative to the visible portion of the document
-    const x = (e.clientX - rect.left + scrollLeft) / container.scrollWidth;
-    const y = (e.clientY - rect.top + scrollTop) / container.scrollHeight;
-    
-    console.log('Position selected:', { x, y, page: currentPage });
-    
-    setSelectedPosition({ x, y });
-    
-    // Show annotation input at the clicked position
-    setCurrentAnnotationId(null); // New annotation, not editing
-    setNewAnnotation(''); // Clear any previous text
-    setShowAnnotationInput(true);
-    
-    // Focus the input
-    setTimeout(() => {
-      if (annotationInputRef.current) {
-        annotationInputRef.current.focus();
+    try {
+      const response = await fetch(`/api/comments/${editingCommentId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          content: editedCommentContent
+        }),
+      });
+      
+      if (response.ok) {
+        setComments(prevComments => 
+          prevComments.map(comment => 
+            comment.id === editingCommentId 
+              ? { ...comment, content: editedCommentContent } 
+              : comment
+          )
+        );
+        setEditingCommentId(null);
+        setEditedCommentContent('');
       }
-    }, 50);
-  };
-
-  const toggleLocationSelect = () => {
-    setLocationSelectMode(!locationSelectMode);
-    if (!locationSelectMode) {
-      setSelectedPosition(null);
+    } catch (error) {
+      console.error('Error updating comment:', error);
     }
   };
 
-  const formatLocationInfo = (annotation: Annotation) => {
-    if (annotation.pageNumber && (annotation.positionX !== undefined || annotation.positionY !== undefined)) {
-      return `Page ${annotation.pageNumber}${annotation.positionX !== undefined ? `, position: ${Math.round(annotation.positionX * 100)}%` : ''}`;
-    }
-    return null;
-  };
-
-  const renderAnnotationMarkers = () => {
-    if (!annotations || annotations.length === 0) return null;
+  // Delete a comment
+  const deleteComment = async (commentId: string) => {
+    if (!commentId) return;
     
-    return annotations
-      .filter(annotation => 
-        annotation.pageNumber === currentPage && 
-        annotation.positionX !== undefined && 
-        annotation.positionY !== undefined
-      )
-      .map(annotation => (
-        <div 
-          key={annotation.id}
-          className={`absolute w-5 h-5 rounded-full -ml-2.5 -mt-2.5 z-10 hover:z-20 hover:scale-110 transition-transform cursor-pointer ${
-            selectedAnnotationId === annotation.id ? 'bg-yellow-500 ring-2 ring-yellow-300' : 'bg-blue-500'
-          }`}
-          style={{ 
-            left: `${annotation.positionX! * 100}%`, 
-            top: `${annotation.positionY! * 100}%`,
-            position: 'absolute'
-          }}
-          title={`${annotation.user.name || annotation.user.email}: ${annotation.content}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            
-            if (annotation.user.id === session?.data?.user?.id) {
-              setSelectedAnnotationId(annotation.id);
-              setSelectedPosition({ x: annotation.positionX!, y: annotation.positionY! });
-              setNewAnnotation(annotation.content);
-              setCurrentAnnotationId(annotation.id);
-              setShowAnnotationInput(true);
-            } else {
-              setSelectedAnnotationId(annotation.id);
-              const annotationElement = window.document.getElementById(`annotation-${annotation.id}`);
-              if (annotationElement) {
-                annotationElement.scrollIntoView({ behavior: 'smooth' });
-              }
-            }
-          }}
-        >
-          <span className="sr-only">Annotation by {annotation.user.name || annotation.user.email}</span>
-        </div>
-      ));
+    try {
+      const response = await fetch(`/api/comments/${commentId}`, {
+        method: 'DELETE',
+      });
+      
+      if (response.ok) {
+        setComments(prevComments => 
+          prevComments.filter(comment => comment.id !== commentId)
+        );
+        setShowMenuForComment(null);
+      }
+    } catch (error) {
+      console.error('Error deleting comment:', error);
+    }
   };
 
-  // Add a function to handle page navigation and update the UI for page controls
+  // Toggle comment menu
+  const toggleCommentMenu = (commentId: string) => {
+    setShowMenuForComment(prev => prev === commentId ? null : commentId);
+  };
+
+  // Check if user can edit/delete comment
+  const canManageComment = (comment: Comment) => {
+    if (!session?.data?.user?.id) return false;
+    return comment.userId === session.data.user.id || userPermission?.role === 'owner';
+  };
+  
+  // Handle page navigation
   const handlePageChange = (newPage: number) => {
-    // Validate page number to ensure it's positive
     const pageToSet = Math.max(1, newPage);
     setCurrentPage(pageToSet);
-    
-    // Clear any selected annotation and position
-    setSelectedAnnotationId(null);
-    if (locationSelectMode) {
-      setSelectedPosition(null);
-    }
   };
-
-  // Helper function to style annotations being edited
-  const isBeingEditedByOthers = (annotation: Annotation) => {
-    // Check if this annotation has the isBeingEdited flag and it's not by the current user
-    return annotation.isBeingEdited === true && 
-      annotation.user.id !== session?.data?.user?.id;
-  };
-
+  
+  // Loading state
   if (loading) {
     return (
       <div>
@@ -427,6 +306,7 @@ export default function DocumentViewer() {
     );
   }
 
+  // Error state
   if (error || !document) {
     return (
       <div>
@@ -448,371 +328,214 @@ export default function DocumentViewer() {
       <div className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
         <div className="px-4 py-6 sm:px-0">
           <div className="flex justify-between items-center mb-6">
-            <h1 className="text-2xl font-bold text-gray-900">{document.title}</h1>
-            {document.group && (
-              <div className="text-sm text-gray-600">
-                Group: {document.group.name}
-              </div>
-            )}
+            <div className="flex items-center gap-3">
+              {document.groupId && (
+                <Link 
+                  href={`/user/groups/${document.groupId}`}
+                  className="inline-flex items-center text-gray-600 hover:text-gray-900 mr-3"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M9.707 16.707a1 1 0 01-1.414 0l-6-6a1 1 0 010-1.414l6-6a1 1 0 011.414 1.414L5.414 9H17a1 1 0 110 2H5.414l4.293 4.293a1 1 0 010 1.414z" clipRule="evenodd" />
+                  </svg>
+                  <span className="ml-1">Back to Group</span>
+                </Link>
+              )}
+              <h1 className="text-2xl font-bold text-gray-900">{document.title}</h1>
+            </div>
+            
+            <div className="flex items-center gap-4">
+              {document.group && (
+                <div className="text-sm text-gray-600">
+                  Group: {document.group.name}
+                </div>
+              )}
+                
+              <button 
+                onClick={() => setShowPermissions(!showPermissions)}
+                className="text-sm bg-gray-100 hover:bg-gray-200 px-3 py-1 rounded-md flex items-center gap-1"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 9a3 3 0 100-6 3 3 0 000 6zm-7 9a7 7 0 1114 0H3z" clipRule="evenodd" />
+                </svg>
+                Permissions
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            <div className="md:col-span-2 relative">
-              <div 
-                className="bg-white rounded-lg shadow overflow-hidden relative"
-                onClick={handleDocumentClick}
-              >
+            <div className="md:col-span-2 bg-white rounded-lg shadow overflow-hidden">
+              <div className="relative">
                 <iframe 
-                  ref={iframeRef}
                   src={document.cloudStorageUrl} 
                   className="w-full h-[80vh]" 
                   title={document.title}
                   allow="fullscreen"
-                ></iframe>
+                />
                 
-                {/* Annotation position markers */}
-                {renderAnnotationMarkers()}
-                
-                {/* Transparent overlay - change opacity to almost invisible */}
-                {locationSelectMode && (
-                  <div className="absolute inset-0 bg-blue-500 bg-opacity-5 pointer-events-none">
-                    <div className="absolute top-2 left-2 bg-white py-1 px-3 rounded-full text-sm shadow-md">
-                      Click to add annotation
-                    </div>
-                  </div>
-                )}
-                
-                {/* Annotation input box */}
-                {locationSelectMode && selectedPosition && (
-                  <div 
-                    className="absolute bg-white border-l-4 border-blue-500 shadow-lg rounded-md p-3 z-30"
-                    style={{ 
-                      left: `${selectedPosition.x * 100}%`, 
-                      top: `${selectedPosition.y * 100}%`,
-                      transform: 'translate(20px, -50%)',
-                      width: '300px',
-                      maxWidth: '80%'
-                    }}
-                    onClick={e => e.stopPropagation()}
-                  >
-                    <textarea
-                      autoFocus
-                      value={newAnnotation}
-                      onChange={handleAnnotationChange}
-                      className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500"
-                      rows={3}
-                      placeholder="Type your annotation here..."
-                    ></textarea>
-                    
-                    <div className="flex justify-between mt-2">
-                      <button
-                        onClick={() => {
-                          setLocationSelectMode(false);
-                          setSelectedPosition(null);
-                        }}
-                        className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded"
-                      >
-                        Cancel
-                      </button>
-                      
-                      <button
-                        onClick={addAnnotation}
-                        disabled={!newAnnotation.trim()}
-                        className="text-xs px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded disabled:opacity-50"
-                      >
-                        Add
-                      </button>
-                    </div>
-                  </div>
-                )}
-                
-                {selectedPosition && !locationSelectMode && (
-                  <div 
-                    className="absolute w-6 h-6 bg-blue-500 rounded-full -ml-3 -mt-3 z-10"
-                    style={{ 
-                      left: `${selectedPosition.x * 100}%`, 
-                      top: `${selectedPosition.y * 100}%` 
-                    }}
-                  ></div>
-                )}
+                {/* Document overlay for collaboration */}
+                <div 
+                  ref={documentContainerRef}
+                  className="absolute inset-0 pointer-events-none"
+                >
+                  {/* Placeholder for collaboration indicators if needed */}
+                </div>
               </div>
               
-              <div className="mt-2 flex items-center justify-between">
-                <div className="flex items-center">
-                  <button 
-                    onClick={() => handlePageChange(currentPage - 1)}
-                    disabled={currentPage <= 1}
-                    className="p-1 rounded-md text-gray-500 hover:text-gray-700 disabled:opacity-50"
-                    title="Previous page"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
-                    </svg>
-                  </button>
-                  
-                  <div className="flex items-center mx-2">
-                    <span className="text-sm text-gray-600 mr-2">Page:</span>
-                    <input 
-                      type="number" 
-                      min="1"
-                      value={currentPage}
-                      onChange={(e) => handlePageChange(parseInt(e.target.value) || 1)}
-                      className="w-16 border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 text-center"
-                    />
-                  </div>
-                  
-                  <button 
-                    onClick={() => handlePageChange(currentPage + 1)}
-                    className="p-1 rounded-md text-gray-500 hover:text-gray-700"
-                    title="Next page"
-                  >
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                    </svg>
-                  </button>
+              {/* Document controls */}
+              <div className="flex items-center justify-between px-4 py-2 bg-gray-50 border-t border-gray-200">
+                <div>
+                  {/* Page navigation removed */}
                 </div>
                 
                 <div>
-                  <button
-                    onClick={toggleLocationSelect}
-                    className={`text-xs px-3 py-1 rounded-full ${locationSelectMode ? 'bg-blue-500 text-white' : 'bg-gray-200 text-gray-800'}`}
+                  <a 
+                    href={document.cloudStorageUrl} 
+                    target="_blank" 
+                    rel="noopener noreferrer"
+                    className="text-sm text-blue-600 hover:text-blue-800"
                   >
-                    {locationSelectMode ? 'Cancel Location' : 'Add Location Marker'}
-                  </button>
+                    Download
+                  </a>
                 </div>
               </div>
             </div>
-
-            <div className="bg-white rounded-lg shadow p-4">
-              <h2 className="text-lg font-medium mb-4">Annotations</h2>
-              
-              <div className="mb-4">
-                <button
-                  onClick={() => {
-                    setLocationSelectMode(true);
-                    setCurrentAnnotationId(null);
-                    setNewAnnotation('');
-                  }}
-                  className="w-full bg-blue-500 hover:bg-blue-600 text-white px-4 py-2 rounded-md flex items-center justify-center"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" viewBox="0 0 20 20" fill="currentColor">
-                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-11a1 1 0 10-2 0v2H7a1 1 0 100 2h2v2a1 1 0 102 0v-2h2a1 1 0 100-2h-2V7z" clipRule="evenodd" />
-                  </svg>
-                  Add Annotation
-                </button>
-              </div>
-              
-              {/* Real-time typing indicators */}
-              {Array.from(typingUsers.values()).length > 0 && (
-                <div className="mb-4 border rounded-md overflow-hidden">
-                  <div className="bg-gray-50 px-3 py-2 border-b">
-                    <h3 className="text-sm font-medium text-gray-700">Real-time activity</h3>
-                  </div>
-                  <div className="divide-y divide-gray-100">
-                    {Array.from(typingUsers.values()).map((user) => (
-                      user.id !== session?.data?.user?.id && (
-                        <div key={user.id} className="px-3 py-2 flex items-start space-x-3">
-                          <div className="flex-shrink-0">
-                            <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white font-medium">
-                              {(user.name || user.email).charAt(0).toUpperCase()}
-                            </div>
-                          </div>
-                          <div className="min-w-0 flex-1">
-                            <div className="text-sm font-medium text-gray-900 flex items-center">
-                              {user.name || user.email}
-                              <span className="ml-2 flex">
-                                <span className="animate-bounce mx-0.5 bg-gray-500 rounded-full h-1 w-1"></span>
-                                <span className="animate-bounce mx-0.5 bg-gray-500 rounded-full h-1 w-1" style={{animationDelay: '0.2s'}}></span>
-                                <span className="animate-bounce mx-0.5 bg-gray-500 rounded-full h-1 w-1" style={{animationDelay: '0.4s'}}></span>
-                              </span>
-                            </div>
-                            <div className="mt-1 text-sm text-gray-600 italic">
-                              {user.content}
-                            </div>
-                          </div>
-                        </div>
-                      )
-                    ))}
+            
+            {/* Side panel for permissions and comments */}
+            <div className="space-y-4">
+              {showPermissions && (
+                <div className="bg-white rounded-lg shadow p-4">
+                  <h2 className="text-lg font-medium text-gray-900 mb-4">Permissions</h2>
+                  <div className="text-sm text-gray-500">
+                    {userPermission ? (
+                      <p>Your role: <span className="font-medium">{userPermission.role}</span></p>
+                    ) : (
+                      <p>Loading permissions...</p>
+                    )}
                   </div>
                 </div>
               )}
-
-              <div className="space-y-4 max-h-[60vh] overflow-y-auto">
-                {annotations.length > 0 ? (
-                  annotations.map((annotation) => (
-                    <div 
-                      key={annotation.id} 
-                      id={`annotation-${annotation.id}`}
-                      className={`border-l-4 pl-3 py-2 bg-gray-50 ${
-                        selectedAnnotationId === annotation.id 
-                          ? 'border-yellow-500' 
-                          : isBeingEditedByOthers(annotation) 
-                            ? 'border-purple-500 animate-pulse' 
-                            : 'border-blue-500'
+              
+              {/* Comments Section */}
+              <div className="bg-white rounded-lg shadow p-4">
+                <h2 className="text-lg font-medium text-gray-900 mb-4">Comments</h2>
+                
+                {/* Comment input form */}
+                <form onSubmit={handleAddComment} className="mb-6">
+                  <div className="relative">
+                    <textarea
+                      value={newComment}
+                      onChange={(e) => setNewComment(e.target.value)}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      placeholder="Add a comment..."
+                      rows={3}
+                    />
+                    <button 
+                      type="submit"
+                      disabled={!newComment.trim() || submittingComment}
+                      className={`mt-2 px-4 py-2 text-sm font-medium rounded-md text-white ${
+                        !newComment.trim() || submittingComment 
+                          ? 'bg-blue-300' 
+                          : 'bg-blue-600 hover:bg-blue-700'
                       }`}
                     >
-                      <div className="flex justify-between items-center">
-                        <div className="text-sm font-medium text-gray-900">
-                          {annotation.user.name || annotation.user.email}
-                        </div>
-                        
-                        <div className="flex space-x-2 items-center">
-                          {formatLocationInfo(annotation) && (
-                            <span className="text-xs bg-gray-100 px-2 py-0.5 rounded">
-                              {formatLocationInfo(annotation)}
-                            </span>
-                          )}
-                          
-                          {/* Edit button for the user's own annotations */}
-                          {annotation.user.id === session?.data?.user?.id && (
-                            <button 
-                              onClick={() => {
-                                // Toggle edit mode for this annotation
-                                if (selectedAnnotationId === annotation.id) {
-                                  setSelectedAnnotationId(null);
-                                } else {
-                                  setSelectedAnnotationId(annotation.id);
-                                  setNewAnnotation(annotation.content);
-                                }
-                              }}
-                              className="text-xs text-blue-500 hover:text-blue-700"
-                            >
-                              {selectedAnnotationId === annotation.id ? 'Cancel' : 'Edit'}
-                            </button>
-                          )}
+                      {submittingComment ? 'Posting...' : 'Post Comment'}
+                    </button>
+                  </div>
+                </form>
+                
+                {/* Comments list */}
+                <div className="space-y-4 max-h-[40vh] overflow-y-auto">
+                  {comments.length === 0 ? (
+                    <p className="text-gray-500 text-center py-4">No comments yet</p>
+                  ) : (
+                    comments.map((comment) => (
+                      <div key={comment.id} className="border-b border-gray-200 pb-4">
+                        <div className="flex items-start">
+                          <div className="flex-shrink-0">
+                            <div className="w-8 h-8 rounded-full bg-blue-500 flex items-center justify-center text-white font-medium">
+                              {comment.user?.name?.charAt(0) || comment.user?.email?.charAt(0) || '?'}
+                            </div>
+                          </div>
+                          <div className="ml-3 flex-1">
+                            <div className="flex justify-between items-start">
+                              <p className="text-sm font-medium text-gray-900">
+                                {comment.user?.name || comment.user?.email || 'Anonymous'}
+                              </p>
+                              {canManageComment(comment) && (
+                                <div className="relative">
+                                  <button 
+                                    onClick={() => toggleCommentMenu(comment.id)}
+                                    className="text-gray-400 hover:text-gray-600 p-1"
+                                  >
+                                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                      <path d="M6 10a2 2 0 11-4 0 2 2 0 014 0zM12 10a2 2 0 11-4 0 2 2 0 014 0zM16 12a2 2 0 100-4 2 2 0 000 4z" />
+                                    </svg>
+                                  </button>
+                                  {showMenuForComment === comment.id && (
+                                    <div className="absolute right-0 mt-1 w-40 bg-white rounded-md shadow-lg z-10 border border-gray-200">
+                                      <div className="py-1">
+                                        <button
+                                          onClick={() => startEditingComment(comment)}
+                                          className="block w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100"
+                                        >
+                                          Edit
+                                        </button>
+                                        <button
+                                          onClick={() => deleteComment(comment.id)}
+                                          className="block w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-gray-100"
+                                        >
+                                          Delete
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+                            
+                            {editingCommentId === comment.id ? (
+                              <div className="mt-1">
+                                <textarea
+                                  value={editedCommentContent}
+                                  onChange={(e) => setEditedCommentContent(e.target.value)}
+                                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                  rows={3}
+                                />
+                                <div className="flex space-x-2 mt-2">
+                                  <button
+                                    onClick={saveEditedComment}
+                                    disabled={!editedCommentContent.trim()}
+                                    className="px-3 py-1 bg-blue-600 text-white text-xs rounded-md hover:bg-blue-700 disabled:bg-blue-300"
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    onClick={cancelEditingComment}
+                                    className="px-3 py-1 border border-gray-300 text-gray-700 text-xs rounded-md hover:bg-gray-50"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <>
+                                <p className="text-sm text-gray-700 whitespace-pre-wrap">{comment.content}</p>
+                                <p className="text-xs text-gray-500 mt-1">
+                                  {new Date(comment.createdAt).toLocaleString()}
+                                </p>
+                              </>
+                            )}
+                          </div>
                         </div>
                       </div>
-                      
-                      {/* Show either the content or an edit box */}
-                      {selectedAnnotationId === annotation.id && annotation.user.id === session?.data?.user?.id ? (
-                        <div className="mt-2">
-                          <textarea
-                            value={newAnnotation}
-                            onChange={(e) => {
-                              setNewAnnotation(e.target.value);
-                              
-                              // Emit typing event for real-time collaboration
-                              socketRef.current?.emit('userTyping', {
-                                documentId,
-                                annotationId: annotation.id,
-                                user: {
-                                  id: session.data.user.id,
-                                  name: session.data.user.name,
-                                  email: session.data.user.email
-                                },
-                                content: e.target.value
-                              });
-                            }}
-                            className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 text-sm"
-                            rows={2}
-                          />
-                          <div className="mt-1 flex justify-end">
-                            <button
-                              onClick={async () => {
-                                // Update the annotation
-                                try {
-                                  const response = await fetch(`/api/annotations/${annotation.id}`, {
-                                    method: 'PUT',
-                                    headers: {
-                                      'Content-Type': 'application/json',
-                                    },
-                                    body: JSON.stringify({
-                                      content: newAnnotation,
-                                    }),
-                                  });
-                                  
-                                  if (response.ok) {
-                                    const updated = await response.json();
-                                    
-                                    // Update in local state
-                                    setAnnotations(annotations.map(a => 
-                                      a.id === annotation.id ? updated : a
-                                    ));
-                                    
-                                    // Broadcast to other users
-                                    socketRef.current?.emit('updateAnnotation', updated);
-                                    
-                                    // Exit edit mode
-                                    setSelectedAnnotationId(null);
-                                  }
-                                } catch (error) {
-                                  console.error('Error updating annotation:', error);
-                                }
-                              }}
-                              className="text-xs px-2 py-1 bg-blue-500 hover:bg-blue-600 text-white rounded"
-                            >
-                              Save
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="mt-1 text-sm text-gray-600">
-                            {annotation.content}
-                          </div>
-                          <div className="mt-1 text-xs text-gray-500">
-                            {new Date(annotation.createdAt).toLocaleString()}
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  ))
-                ) : (
-                  <div className="text-gray-500 text-center py-4">
-                    No annotations yet
-                  </div>
-                )}
+                    ))
+                  )}
+                </div>
               </div>
             </div>
           </div>
         </div>
       </div>
-
-      {/* Floating annotation input */}
-      {showAnnotationInput && selectedPosition && (
-        <div 
-          className="absolute bg-white border-l-4 border-blue-500 shadow-lg rounded-md p-3 w-80 z-20"
-          style={{ 
-            left: `${selectedPosition.x * 100}%`, 
-            top: `${selectedPosition.y * 100}%`,
-            transform: 'translate(10px, 10px)',
-            maxWidth: '80%'
-          }}
-          onClick={e => e.stopPropagation()}
-        >
-          <div className="text-sm font-medium text-gray-900 mb-1">
-            {currentAnnotationId ? 'Edit annotation' : 'New annotation'}
-          </div>
-          
-          <textarea
-            ref={annotationInputRef}
-            value={newAnnotation}
-            onChange={handleAnnotationChange}
-            className="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 mt-1 text-sm text-gray-600"
-            rows={3}
-            placeholder="Type your annotation here..."
-            autoFocus
-          ></textarea>
-          
-          <div className="flex justify-between mt-2">
-            <button
-              onClick={() => {
-                setShowAnnotationInput(false);
-                setLocationSelectMode(false);
-                setSelectedPosition(null);
-              }}
-              className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 rounded text-gray-700"
-            >
-              Cancel
-            </button>
-            
-            <div className="text-xs text-gray-500 flex items-center">
-              <span className="animate-pulse mr-1">●</span>
-              Auto-saving
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
-} 
+}

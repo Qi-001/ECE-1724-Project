@@ -1,20 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { authClient } from '@/lib/auth-client';
 import prisma from '@/lib/prisma';
 import { Prisma } from '@prisma/client';
 
 export async function POST(request: NextRequest) {
   try {
-    // Get the session token from cookies
     const sessionToken = request.cookies.get('better-auth.session_token')?.value.split('.')[0];
     if (!sessionToken) {
-        return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+      return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
 
-    // Fetch the session using the token
     const session = await prisma.session.findUnique({
-        where: { token: sessionToken },
-        include: { user: true }
+      where: { token: sessionToken },
+      include: { user: true }
     });
   
     if (!session?.user?.id) {
@@ -22,47 +19,64 @@ export async function POST(request: NextRequest) {
     }
 
     const userId = session.user.id;
-    const { content, documentId, pageNumber, positionX, positionY } = await request.json();
+    const { content, documentId, pageNumber, x, y, width, height } = await request.json();
 
-    if (!content || !documentId) {
-      return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
+    if (!documentId) {
+      return NextResponse.json({ error: 'Document ID is required' }, { status: 400 });
+    }
+    
+    if (pageNumber === undefined || x === undefined || y === undefined) {
+      return NextResponse.json({ error: 'Page number and position (x, y) are required' }, { status: 400 });
     }
 
-    // Check if user has access to the document
+    // Check if user has editor or owner permission
+    const userPermission = await prisma.documentPermission.findUnique({
+      where: {
+        documentId_userId: {
+          documentId,
+          userId
+        }
+      }
+    });
+
+    // Check document owner if no explicit permission found
     const document = await prisma.document.findUnique({
       where: { id: documentId },
-      include: {
+      include: { 
         group: {
           include: {
-            members: {
-              select: {
-                userId: true,
-              },
-            },
-          },
-        },
-      },
+            members: true
+          }
+        }
+      }
     });
 
     if (!document) {
       return NextResponse.json({ error: 'Document not found' }, { status: 404 });
     }
 
-    const isUploader = document.uploaderId === userId;
+    const isOwner = document.uploaderId === userId;
     const isGroupMember = document.group?.members.some(member => member.userId === userId) || false;
-    
-    if (!isUploader && !isGroupMember) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 403 });
+    const canEdit = isOwner || 
+                    userPermission?.role === 'owner' || 
+                    userPermission?.role === 'editor' || 
+                    (isGroupMember && !userPermission); // Group members can edit if no explicit permission set
+
+    if (!canEdit) {
+      return NextResponse.json({ error: 'You do not have permission to create annotations' }, { status: 403 });
     }
 
     // Create the annotation
     const annotationData: Prisma.AnnotationCreateInput = {
-      content,
+      content: content || '',
       document: { connect: { id: documentId } },
       user: { connect: { id: userId } },
-      ...(pageNumber !== undefined ? { pageNumber } : {}),
-      ...(positionX !== undefined ? { positionX } : {}),
-      ...(positionY !== undefined ? { positionY } : {})
+      pageNumber,
+      x,
+      y,
+      width: width || 200,
+      height: height || 100,
+      lastEditedBy: userId
     };
 
     const annotation = await prisma.annotation.create({

@@ -7,13 +7,6 @@ import { s3Client, BUCKET_NAME } from './spaces-config';
 
 export async function createGroup(name: string, description: string | null, id: string) {
   try {
-    //const session = await (authClient as any).getSession();
-    // const session = await authClient.getSession();
-    // console.log('Session data:', session);
-    // if (!session?.data?.user?.id) {
-    //   throw new Error('Not authenticated');
-    // }
-
     const group = await prisma.group.create({
       data: {
         name,
@@ -49,11 +42,6 @@ export async function createGroup(name: string, description: string | null, id: 
 
 export async function uploadGroupFile(file: File, groupId: string, id: string) {
   try {
-    // const session = await (authClient as any).getSession();
-    // if (!session?.user?.id) {
-    //   throw new Error('Not authenticated');
-    // }
-
     // Generate unique file name
     const fileExtension = file.name.split('.').pop();
     const uniqueFileName = `${groupId}/${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExtension}`;

@@ -67,6 +67,11 @@ model User {
   accounts      Account[]
   sessions      Session[]
   sentInvitations GroupInvitation[] @relation("SentInvitations")
+  documentPermissions DocumentPermission[]
+  comments Comment[]
+  googleCalendarCredential GoogleCalendarCredential?
+  createdEvents CalendarEvent[]
+  eventAttendees EventAttendee[]
 
   @@map("user")
 }
@@ -82,6 +87,7 @@ model Group {
   admin       User          @relation("GroupAdmin", fields: [adminId], references: [id])
   members     GroupMember[]
   invitations GroupInvitation[]
+  events      CalendarEvent[]
 }
 
 model GroupMember {
@@ -109,16 +115,35 @@ model Document {
   annotations     Annotation[]
   group           Group?       @relation(fields: [groupId], references: [id])
   uploader        User         @relation(fields: [uploaderId], references: [id])
+  permissions     DocumentPermission[]
+  comments        Comment[]
 }
 
 model Annotation {
+  id          String   @id @default(cuid())
+  content     String
+  documentId  String
+  userId      String
+  pageNumber  Int
+  x           Float
+  y           Float
+  width       Float    @default(200)
+  height      Float    @default(100)
+  lastEditedBy String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  document    Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id])
+}
+
+model Comment {
   id         String   @id @default(cuid())
   content    String
   documentId String
   userId     String
-  pageNumber Int?     // Page number in the document
-  positionX  Float?   // X coordinate in the page (0-1 range)
-  positionY  Float?   // Y coordinate in the page (0-1 range)
+  pageNumber Int?
+  positionX  Float?
+  positionY  Float?
   createdAt  DateTime @default(now())
   updatedAt  DateTime @updatedAt
   document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
@@ -148,6 +173,19 @@ model GroupInvitation {
   inviter    User     @relation("SentInvitations", fields: [inviterId], references: [id])
 }
 
+model DocumentPermission {
+  id         String   @id @default(cuid())
+  role       String   @default("viewer") // "owner", "editor", "viewer"
+  documentId String
+  userId     String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([documentId, userId])
+}
+
 enum UserRole {
   STUDENT
   ADMIN
@@ -156,4 +194,59 @@ enum UserRole {
 enum GroupRole {
   MEMBER
   ADMIN
+}
+
+model GoogleCalendarCredential {
+  id               String   @id @default(cuid())
+  userId           String   @unique
+  accessToken      String
+  refreshToken     String
+  expiryDate       DateTime
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model CalendarEvent {
+  id               String    @id @default(cuid())
+  title            String
+  description      String?
+  location         String?
+  startTime        DateTime
+  endTime          DateTime
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  creatorId        String
+  googleEventId    String?
+  groupId          String?
+  status           EventStatus @default(CONFIRMED)
+  creator          User      @relation(fields: [creatorId], references: [id])
+  group            Group?    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  attendees        EventAttendee[]
+}
+
+model EventAttendee {
+  id              String   @id @default(cuid())
+  eventId         String
+  userId          String
+  responseStatus  ResponseStatus @default(PENDING)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+  event           CalendarEvent @relation(fields: [eventId], references: [id], onDelete: Cascade)
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([eventId, userId])
+}
+
+enum EventStatus {
+  CONFIRMED
+  CANCELLED
+  TENTATIVE
+}
+
+enum ResponseStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  TENTATIVE
 }

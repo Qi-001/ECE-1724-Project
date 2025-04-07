@@ -34,7 +34,7 @@ export default function UserSearchInvite({ groupId }: UserSearchInviteProps) {
     setError(null);
     
     try {
-      const response = await fetch(`/api/users/search?email=${encodeURIComponent(searchEmail)}`);
+      const response = await fetch(`/api/users/search?q=${encodeURIComponent(searchEmail)}`);
       
       if (!response.ok) {
         const data = await response.json();
@@ -42,9 +42,9 @@ export default function UserSearchInvite({ groupId }: UserSearchInviteProps) {
       }
       
       const data = await response.json();
-      setSearchResults(data.users);
+      setSearchResults(data);
       
-      if (data.users.length === 0) {
+      if (data.length === 0) {
         setError('No user found with this email address');
       }
     } catch (error: any) {
